@@ -63,8 +63,7 @@ jobs:
                  elseif ($refTag) { $refTag }
                  else             { "latest-build" }
 
-          $prerelease = if ($tag -eq "latest-build") { "true" }
-                        elseif ("${{ github.event.inputs.prerelease }}" -eq "true") { "true" }
+          $prerelease = if ("${{ github.event.inputs.prerelease }}" -eq "true") { "true" }
                         else { "false" }
 
           Write-Host "Tag        : $tag"
