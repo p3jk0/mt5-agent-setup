@@ -608,6 +608,14 @@ function Main {
         -ClearCache:$ClearCache
 
     try {
+        $procs = Get-Process -Name "metatester64", "metatester" -ErrorAction SilentlyContinue
+        if ($procs) {
+            foreach ($p in $procs) {
+                try { $p | Stop-Process -Force; Write-OK "Killed orphan PID $($p.Id)" }
+                catch { Write-WARN "Could not kill PID $($p.Id): $_" }
+            }
+        }
+
         # 2. Copy exe to TesterRoot (single location)
         Write-Step "Deploying metatester64.exe → $TesterRoot"
         $null = New-Item -ItemType Directory -Path $TesterRoot -Force
