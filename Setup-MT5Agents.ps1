@@ -70,14 +70,14 @@ param(
     [string]$GitHubTag = "",
     [string]$AssetName = "mt5-tester-agent.zip",
     [int]   $MaxAgents = [Environment]::ProcessorCount,
-    [string]$AgentPassword = "",
+    [string]$AgentPassword = "mtmtmt555",
     [string]$TesterRoot = "",
     [int]   $PortStart = 3000,
     [string]$AgentHost = "127.0.0.1",
     [int]   $PortCheckTimeout = 5000,
     [switch]$SkipStart,
-    [switch]$KeepDownload,
-    [switch]$ClearCache
+    [bool]$KeepDownload = $true,
+    [bool]$ClearCache = $true
 )
 
 # Env-var fallbacks
