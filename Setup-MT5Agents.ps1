@@ -337,8 +337,7 @@ function Uninstall-AllAgents {
     Write-Step "Uninstalling existing MetaTester agent services..."
 
     # Discover all MetaTester services via CIM
-    $services = Get-CimInstance -ClassName Win32_Service -Filter "Name LIKE 'MetaTester%'" `
-        -ErrorAction SilentlyContinue
+    $services = Get-CimInstance -ClassName Win32_Service -Filter "Name LIKE 'MetaTester%'" -ErrorAction SilentlyContinue
 
     if (-not $services) {
         Write-OK "No existing MetaTester services found."
