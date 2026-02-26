@@ -211,7 +211,7 @@ function Invoke-AssetDownload {
     # Step 1 — resolve the S3/CDN redirect URL without following it
     # (S3 rejects requests that carry a GitHub Authorization header)
     $resp = Invoke-WebRequest -Uri $apiUrl -Headers $authHeaders `
-        -MaximumRedirection 0 -ErrorAction SilentlyContinue
+        -MaximumRedirection 0 -SkipHttpErrorCheck
     $cdnUrl = $resp.Headers.Location
 
     # Step 2 — download from CDN with no auth header
