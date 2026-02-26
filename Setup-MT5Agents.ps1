@@ -1,48 +1,53 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    MT5 Strategy Tester — Automated Agent Distributor
+    MT5 Strategy Tester — Automated Agent Distributor v2.0
 .DESCRIPTION
-    Downloads the MT5 tester package from a private GitHub Release,
-    terminates / removes all existing agents, then creates the maximum
-    number of new agents (1 per logical CPU core).
+    Downloads metatester64.exe from a private GitHub Release,
+    stops/removes all existing agents, then creates and launches
+    N agents (default: 1 per logical CPU) using metatester64's
+    own /agent and /password command-line interface.
     Adds Windows Firewall rules and Defender exclusions automatically.
 
 .PARAMETER GitHubToken
-    GitHub Personal Access Token (repo scope for private, any for public).
-    Alternatively set env: MT5_GITHUB_TOKEN
+    GitHub PAT (repo scope for private repos).
+    Alternatively: env MT5_GITHUB_TOKEN
 
 .PARAMETER GitHubOwner
-    GitHub username or org that owns the repo.
-    Alternatively set env: MT5_GITHUB_OWNER
+    GitHub username or org.
+    Alternatively: env MT5_GITHUB_OWNER
 
 .PARAMETER GitHubRepo
-    Repository name containing the release.
-    Alternatively set env: MT5_GITHUB_REPO  (default: mt5-agent-setup)
+    Repo containing the release. Default: mt5-agent-setup
+    Alternatively: env MT5_GITHUB_REPO
 
 .PARAMETER GitHubTag
-    Release tag to download. Use "latest" (default) for the newest release.
-    Alternatively set env: MT5_GITHUB_TAG
+    Release tag. Use "latest" (default) for newest release.
+    Alternatively: env MT5_GITHUB_TAG
 
 .PARAMETER AssetName
-    Release asset filename to download. Default: mt5-tester-agent.zip
+    Release asset filename. Default: mt5-tester-agent.zip
+
+.PARAMETER MaxAgents
+    Number of agents to create. Default: logical CPU count.
 
 .PARAMETER AgentPassword
-    Password written into each agent's metatester64.ini.
-    Must match the password set in MT5 Terminal → Tools → Options → Expert Advisors → Password.
-    Alternatively set env: MT5_AGENT_PASSWORD
-    If omitted, agents run without a password (local-only setups only).
+    Password written into each agent's ini AND passed via /password flag.
+    Must match Terminal → Tools → Options → Expert Advisors → Password.
+    Alternatively: env MT5_AGENT_PASSWORD
 
 .PARAMETER TesterRoot
-    Override the tester output folder.
+    Override tester output folder.
     Default: %APPDATA%\MetaQuotes\Terminal\Common\Tester
 
 .PARAMETER PortStart
-    First agent port to try. Default: 3000
-    If a port is already in use it is skipped and the next one is tried automatically.
+    First port to try. Default: 3000
 
 .PARAMETER AgentHost
     Host/IP for agent binding. Default: 127.0.0.1
+
+.PARAMETER PortCheckTimeout
+    Milliseconds to wait for an agent to bind its port after launch. Default: 3000
 
 .PARAMETER SkipStart
     Create agent folders but do not launch processes.
@@ -52,18 +57,6 @@
 
 .EXAMPLE
     .\Setup-MT5Agents.ps1 -GitHubToken ghp_xxx -GitHubOwner myorg -AgentPassword "s3cr3t"
-
-.EXAMPLE
-    $env:MT5_GITHUB_TOKEN   = "ghp_xxx"
-    $env:MT5_GITHUB_OWNER   = "myorg"
-    $env:MT5_AGENT_PASSWORD = "s3cr3t"
-    .\Setup-MT5Agents.ps1
-
-.NOTES
-    Must be run as Administrator.
-    Private repo: token needs at minimum the `repo` scope.
-    Public repo:  token needs no special scope, but is still required for
-                  high-rate API calls.
 #>
 [CmdletBinding()]
 param(
@@ -72,21 +65,23 @@ param(
     [string]$GitHubRepo = "",
     [string]$GitHubTag = "",
     [string]$AssetName = "mt5-tester-agent.zip",
+    [int]   $MaxAgents = [Environment]::ProcessorCount,
     [string]$AgentPassword = "",
     [string]$TesterRoot = "",
     [int]   $PortStart = 3000,
     [string]$AgentHost = "127.0.0.1",
+    [int]   $PortCheckTimeout = 3000,
     [switch]$SkipStart,
     [switch]$KeepDownload
 )
 
-# Resolve env var fallbacks here — ?? is PS7+ only and iex inherits the caller's shell
-if (-not $GitHubToken) { $GitHubToken = $env:MT5_GITHUB_TOKEN }
-if (-not $GitHubOwner) { $GitHubOwner = $env:MT5_GITHUB_OWNER }
-if (-not $GitHubRepo) { $GitHubRepo = if ($env:MT5_GITHUB_REPO) { $env:MT5_GITHUB_REPO }    else { "mt5-agent-setup" } }
-if (-not $GitHubTag) { $GitHubTag = if ($env:MT5_GITHUB_TAG) { $env:MT5_GITHUB_TAG }     else { "latest" } }
-if (-not $AgentPassword) { $AgentPassword = if ($env:MT5_AGENT_PASSWORD) { $env:MT5_AGENT_PASSWORD } else { "" } }
-if (-not $TesterRoot) { $TesterRoot = Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Tester" }
+# Env-var fallbacks — ?? requires PS7+ which #Requires guarantees
+$GitHubToken = $GitHubToken   ? $GitHubToken   : $env:MT5_GITHUB_TOKEN
+$GitHubOwner = $GitHubOwner   ? $GitHubOwner   : $env:MT5_GITHUB_OWNER
+$GitHubRepo = $GitHubRepo    ? $GitHubRepo    : ($env:MT5_GITHUB_REPO ?? "mt5-agent-setup")
+$GitHubTag = $GitHubTag     ? $GitHubTag     : ($env:MT5_GITHUB_TAG ?? "latest")
+$AgentPassword = $AgentPassword ? $AgentPassword : ($env:MT5_AGENT_PASSWORD ?? "")
+$TesterRoot = $TesterRoot    ? $TesterRoot    : (Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Tester")
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -96,7 +91,7 @@ $ErrorActionPreference = "Stop"
 function Write-Banner {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════╗" -ForegroundColor DarkCyan
-    Write-Host "  ║   MT5 Strategy Tester — Auto Agent Distributor v1.2.0 ║" -ForegroundColor Cyan
+    Write-Host "  ║   MT5 Strategy Tester — Auto Agent Distributor v2.0.0 ║" -ForegroundColor Cyan
     Write-Host "  ║       github.com/$GitHubOwner/$GitHubRepo" -ForegroundColor DarkCyan
     Write-Host "  ╚════════════════════════════════════════════════════════╝" -ForegroundColor DarkCyan
     Write-Host ""
@@ -125,9 +120,6 @@ function Assert-Params {
     if ($missing) {
         Write-ERR "Missing required parameters:"
         $missing | ForEach-Object { Write-Host "    - $_" -ForegroundColor Red }
-        Write-Host ""
-        Write-Host "  Usage example:" -ForegroundColor Gray
-        Write-Host "  .\Setup-MT5Agents.ps1 -GitHubToken ghp_xxx -GitHubOwner myorg -AgentPassword s3cr3t" -ForegroundColor White
         exit 1
     }
     if (-not $AgentPassword) {
@@ -140,20 +132,34 @@ function Assert-Params {
 
 function Test-PortAvailable {
     param([int]$Port)
-    $inUse = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
-    Where-Object { ($_.State -eq "Listen") -or ($_.State -eq "Established") }
-    return (-not $inUse)
+    $props = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
+    return (-not ($props.GetActiveTcpListeners() | Where-Object { $_.Port -eq $Port }))
 }
 
 function Get-NextFreePort {
-    param([int]$StartAt, [int]$MaxSearch = 100)
+    param([int]$StartAt, [int]$MaxSearch = 200)
     $candidate = $StartAt
-    while ($candidate -lt ($StartAt + $MaxSearch)) {
+    $limit = $StartAt + $MaxSearch
+    while ($candidate -lt $limit) {
         if (Test-PortAvailable -Port $candidate) { return $candidate }
-        Write-WARN "Port $candidate in use — trying next"
+        Write-WARN "Port $candidate in use — skipping"
         $candidate++
     }
-    throw "No free port found in range $StartAt – $($StartAt + $MaxSearch - 1)"
+    throw "No free port found in range $StartAt – $($limit - 1)"
+}
+
+# Wait up to $TimeoutMs for a port to become LISTENING (agent startup verification)
+function Wait-PortListening {
+    param([int]$Port, [int]$TimeoutMs = 3000)
+    $deadline = [datetime]::Now.AddMilliseconds($TimeoutMs)
+    $props = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
+    while ([datetime]::Now -lt $deadline) {
+        if ($props.GetActiveTcpListeners() | Where-Object { $_.Port -eq $Port }) { return $true }
+        Start-Sleep -Milliseconds 200
+        # Re-query — listener state can change
+        $props = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
+    }
+    return $false
 }
 
 # ─── GitHub Release download ──────────────────────────────────────────────────
@@ -179,7 +185,7 @@ function Get-ReleaseAsset {
     catch {
         $code = $_.Exception.Response?.StatusCode
         switch ($code) {
-            404 { throw "Release '$Tag' not found in $Owner/$Repo. Check tag name and repo access." }
+            404 { throw "Release '$Tag' not found in $Owner/$Repo." }
             401 { throw "GitHub token invalid or expired." }
             403 { throw "GitHub token lacks repo read access." }
             default { throw "GitHub API error ($code): $_" }
@@ -202,28 +208,28 @@ function Invoke-AssetDownload {
 
     $apiUrl = "https://api.github.com/repos/$Owner/$Repo/releases/assets/$AssetId"
     $sizeMB = [Math]::Round($Size / 1MB, 1)
-    $authHeaders = @{
+    $authHdr = @{
         Authorization          = "Bearer $Token"
         Accept                 = "application/octet-stream"
         "X-GitHub-Api-Version" = "2022-11-28"
     }
 
-    # Step 1 — resolve the S3/CDN redirect URL without following it
-    # (S3 rejects requests that carry a GitHub Authorization header)
-    $resp = Invoke-WebRequest -Uri $apiUrl -Headers $authHeaders `
-        -MaximumRedirection 0 -SkipHttpErrorCheck
-    $cdnUrl = $resp.Headers.Location
+    # Resolve CDN redirect — S3 rejects requests carrying an Authorization header
+    $cdnUrl = $null
+    try {
+        Invoke-WebRequest -Uri $apiUrl -Headers $authHdr -MaximumRedirection 0 | Out-Null
+    }
+    catch {
+        $cdnUrl = $_.Exception.Response.Headers.Location?.ToString()
+        if (-not $cdnUrl) { throw "Could not resolve asset CDN URL: $_" }
+        Write-INFO "CDN redirect → $(([Uri]$cdnUrl).Host)"
+    }
 
-    # Step 2 — download from CDN with no auth header
     Write-INFO "Downloading ${sizeMB} MB → $OutPath"
-    if ($cdnUrl) {
-        Invoke-WebRequest -Uri $cdnUrl -OutFile $OutPath
-    }
-    else {
-        # Private repo served content directly (no redirect)
-        Invoke-WebRequest -Uri $apiUrl -Headers $authHeaders -OutFile $OutPath
-    }
-    Write-OK "Download complete: $([Math]::Round((Get-Item $OutPath).Length/1MB,1)) MB"
+    if ($cdnUrl) { Invoke-WebRequest -Uri $cdnUrl -OutFile $OutPath }
+    else { Invoke-WebRequest -Uri $apiUrl -Headers $authHdr -OutFile $OutPath }
+
+    Write-OK "Download complete: $([Math]::Round((Get-Item $OutPath).Length / 1MB, 1)) MB"
 }
 
 function Get-MT5Package {
@@ -239,7 +245,6 @@ function Get-MT5Package {
     Invoke-AssetDownload -Owner $Owner -Repo $Repo -AssetId $assetInfo.Id `
         -Token $Token -OutPath $zipPath -Size $assetInfo.Size
 
-    # Verify ZIP integrity
     try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
@@ -248,7 +253,7 @@ function Get-MT5Package {
         Write-OK "Package verified — $entryCount file(s)  (tag: $($assetInfo.Tag))"
     }
     catch {
-        throw "Downloaded file is not a valid ZIP. Possibly a partial download — try again."
+        throw "Downloaded file is not a valid ZIP: $_"
     }
 
     $extractDir = Join-Path $tmpDir "extracted"
@@ -257,11 +262,9 @@ function Get-MT5Package {
 
     $testerExe = Get-ChildItem -Path $extractDir -Filter "metatester64.exe" -Recurse |
     Select-Object -First 1
-    if (-not $testerExe) {
-        throw "metatester64.exe not found inside the package. Check the release asset contents."
-    }
-    Write-OK "Executable: $($testerExe.FullName)"
+    if (-not $testerExe) { throw "metatester64.exe not found inside the package." }
 
+    Write-OK "Executable: $($testerExe.FullName)"
     return @{
         TmpDir     = $tmpDir
         ZipPath    = $zipPath
@@ -273,20 +276,65 @@ function Get-MT5Package {
 # ─── Agent lifecycle ──────────────────────────────────────────────────────────
 
 function Stop-AllAgents {
-    Write-Step "Terminating existing tester agent processes..."
+    Write-Step "Terminating existing tester agent processes and removing services..."
 
+    # ── 1. Kill running processes ──────────────────────────────────────────────
     $procs = Get-Process -Name "metatester64", "metatester" -ErrorAction SilentlyContinue
-    if (-not $procs) { Write-OK "No running agents found."; return }
-
-    foreach ($p in $procs) {
-        try { $p | Stop-Process -Force; Write-OK "Killed PID $($p.Id) ($($p.Name))" }
-        catch { Write-WARN "Could not kill PID $($p.Id): $_" }
+    if ($procs) {
+        foreach ($p in $procs) {
+            try { $p | Stop-Process -Force; Write-OK "Killed PID $($p.Id) ($($p.Name))" }
+            catch { Write-WARN "Could not kill PID $($p.Id): $_" }
+        }
+    }
+    else {
+        Write-OK "No running agent processes found."
     }
 
-    Start-Sleep -Milliseconds 800
+    # ── 2. Remove metatester64 Windows services via sc ─────────────────────────
+    # metatester64 /install registers services named "MT5 Tester Agent <host>:<port>"
+    # Query all services whose name starts with the known prefix.
+    $svcPrefix = ""
+
+    $services = Get-CimInstance -ClassName Win32_Service -Filter "Name LIKE 'Metatester%'" -ErrorAction SilentlyContinue
+
+    if (-not $services) {
+        Write-OK "No MT5 agent services found."
+    }
+    else {
+        foreach ($svc in $services) {
+            $svcName = $svc.Name
+
+            # Stop first if still running — sc delete fails on a running service
+            if ($svc.State -eq "Running") {
+                $stopResult = & sc.exe stop $svcName 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-WARN "sc stop '$svcName' — $($stopResult -join ' ')"
+                }
+                else {
+                    Write-INFO "Stopped service: $svcName"
+                }
+                Start-Sleep -Milliseconds 500   # brief pause for SCM to process the stop
+            }
+
+            $delResult = & sc.exe delete $svcName 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-OK "Deleted service: $svcName"
+            }
+            else {
+                Write-WARN "sc delete '$svcName' failed — $($delResult -join ' ')"
+            }
+        }
+    }
+
+    # ── 3. Wait for ports to be released ──────────────────────────────────────
+    $deadline = [datetime]::Now.AddSeconds(5)
+    while ([datetime]::Now -lt $deadline) {
+        if (-not (Get-Process -Name "metatester64", "metatester" -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 300
+    }
 
     $still = Get-Process -Name "metatester64", "metatester" -ErrorAction SilentlyContinue
-    if ($still) { Write-WARN "$($still.Count) process(es) may still be running — they should exit shortly." }
+    if ($still) { Write-WARN "$($still.Count) process(es) still alive — port checks may be unreliable." }
     else { Write-OK "All agents terminated." }
 }
 
@@ -295,7 +343,7 @@ function Remove-AgentFolders {
 
     Write-Step "Removing existing agent folders..."
 
-    if (-not (Test-Path $TesterPath)) { Write-INFO "Tester folder doesn't exist yet — nothing to clean."; return }
+    if (-not (Test-Path $TesterPath)) { Write-INFO "Tester folder not found — nothing to clean."; return }
 
     $folders = Get-ChildItem -Path $TesterPath -Directory -Filter "Agent-*" -ErrorAction SilentlyContinue
     if (-not $folders) { Write-OK "No agent folders found."; return }
@@ -316,18 +364,22 @@ function New-AgentFolders {
         [string] $Password
     )
 
-    Write-Step "Creating $Count agent(s) (1 per logical CPU)..."
+    Write-Step "Creating $Count agent folder(s)..."
     $null = New-Item -ItemType Directory -Path $TesterPath -Force
 
     $assignedPorts = [System.Collections.Generic.List[int]]::new()
     $nextPort = $PortStart
+    # Track attempted agents separately so port search cursor advances correctly
+    # even when an individual agent fails (fixes original loop-counter/skip gap)
+    $attempted = 0
 
-    for ($i = 0; $i -lt $Count; $i++) {
-        # Find the next available port — skips any already bound
+    while (($assignedPorts.Count -lt $Count) -and ($attempted -lt ($Count * 3))) {
+        $attempted++
+
         try { $port = Get-NextFreePort -StartAt $nextPort }
-        catch { Write-ERR "Agent $($i + 1): $_"; continue }
+        catch { Write-ERR "Port search exhausted: $_"; break }
 
-        $nextPort = $port + 1   # advance search cursor past current assignment
+        $nextPort = $port + 1   # advance cursor past this assignment
 
         $dir = Join-Path $TesterPath "Agent-$AgentHost-$port"
         $destExe = Join-Path $dir "metatester64.exe"
@@ -337,7 +389,8 @@ function New-AgentFolders {
             $null = New-Item -ItemType Directory -Path $dir -Force
             Copy-Item -Path $SourceExe -Destination $destExe -Force
 
-            # Write ini — Password line only added when provided
+            # metatester64.ini — minimal config; /agent and /password CLI args take precedence
+            # but the ini provides a fallback and documents the intended port clearly.
             $iniLines = @(
                 "[Common]",
                 "Login=0",
@@ -350,42 +403,91 @@ function New-AgentFolders {
             $iniLines | Set-Content -Path $iniPath -Encoding UTF8
 
             $pwdStatus = if ($Password) { "pwd ✔" } else { "no pwd" }
-            Write-OK "Agent $($i+1)/$Count  →  $AgentHost`:$port  [$pwdStatus]"
+            Write-OK "Agent $($assignedPorts.Count + 1)/$Count  →  $AgentHost`:$port  [$pwdStatus]"
             $assignedPorts.Add($port)
         }
         catch {
             Write-ERR "Failed to create agent on port ${port}: $_"
+            # Remove partially created folder to keep state clean
+            Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
-    Write-OK "$($assignedPorts.Count) / $Count agents created successfully."
+    if ($assignedPorts.Count -lt $Count) {
+        Write-WARN "Only $($assignedPorts.Count) of $Count agents created."
+    }
+    else {
+        Write-OK "$($assignedPorts.Count) / $Count agent folders ready."
+    }
 
-    # Return as array — the comma prevents PS from unwrapping a single-element collection
     return , $assignedPorts.ToArray()
 }
 
 function Start-Agents {
-    param([string]$TesterPath, [string]$AgentHost, [int[]]$Ports)
+    param(
+        [string] $TesterPath,
+        [string] $AgentHost,
+        [int[]]  $Ports,
+        [string] $Password,
+        [int]    $PortCheckTimeout
+    )
 
-    Write-Step "Launching agents..."
+    Write-Step "Launching agents via metatester64 CLI..."
+
+    $started = [System.Collections.Generic.List[int]]::new()
+    $failed = [System.Collections.Generic.List[int]]::new()
 
     foreach ($port in $Ports) {
         $dir = Join-Path $TesterPath "Agent-$AgentHost-$port"
         $exe = Join-Path $dir "metatester64.exe"
 
-        if (-not (Test-Path $exe)) { Write-WARN "Skipping port $port — exe missing."; continue }
+        if (-not (Test-Path $exe)) {
+            Write-WARN "Skipping port $port — exe missing."
+            $failed.Add($port)
+            continue
+        }
+
+        # Build argument list for metatester64:
+        #   /agent:<host>:<port>   — tells the agent which address to bind
+        #   /password:<pass>       — authentication token (optional)
+        #   /log                   — enables log file in the agent directory
+        #
+        # Note: metatester64 reads metatester64.ini from its working directory
+        # as a fallback, but CLI args always take precedence.
+        $argList = @("/agent:`"$AgentHost`:$port`"")
+        if ($Password) { $argList += "/password:`"$Password`"" }
+        $argList += "/log"
 
         try {
-            Start-Process -FilePath $exe `
-                -ArgumentList "/agent:$AgentHost`:$port" `
+            $proc = Start-Process `
+                -FilePath $exe `
+                -ArgumentList $argList `
                 -WorkingDirectory $dir `
-                -WindowStyle Minimized
-            Write-OK "Started  $AgentHost`:$port"
+                -WindowStyle Hidden `
+                -PassThru
+
+            Write-INFO "PID $($proc.Id) launched — waiting for port $port to bind..."
+
+            if (Wait-PortListening -Port $port -TimeoutMs $PortCheckTimeout) {
+                Write-OK "Agent $AgentHost`:$port  [PID $($proc.Id)] — listening ✔"
+                $started.Add($port)
+            }
+            else {
+                Write-WARN "Agent $AgentHost`:$port  [PID $($proc.Id)] — port not bound within ${PortCheckTimeout}ms (check agent log in $dir)"
+                $failed.Add($port)
+            }
         }
         catch {
             Write-ERR "Could not start agent on port ${port}: $_"
+            $failed.Add($port)
         }
     }
+
+    if ($failed.Count -gt 0) {
+        Write-WARN "$($failed.Count) agent(s) did not start cleanly: ports $($failed -join ', ')"
+    }
+
+    return , $started.ToArray()
 }
 
 # ─── Security ─────────────────────────────────────────────────────────────────
@@ -395,38 +497,34 @@ function Add-FirewallRules {
 
     Write-Step "Configuring Windows Firewall..."
 
-    # Remove stale rules
-    @("MT5 Tester Agents Inbound", "MT5 Tester Agents Outbound") |
-    ForEach-Object { Remove-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue }
+    $portRange = "$($Ports[0])-$($Ports[-1])"
+    $exePaths = Get-ChildItem -Path $TesterPath -Filter "metatester64.exe" -Recurse `
+        -ErrorAction SilentlyContinue
 
-    # Use the exact list of assigned ports — handles gaps from skipped ports correctly
-    $portList = $Ports -join ","
-
-    foreach ($dir in @("Inbound", "Outbound")) {
-        New-NetFirewallRule `
-            -DisplayName "MT5 Tester Agents $dir" `
-            -Direction $dir `
-            -Action Allow `
-            -Protocol TCP `
-            -LocalPort $portList `
-            -Profile Any `
-            -Description "MT5 tester agent TCP ports: $portList" | Out-Null
-        Write-OK "FW $dir  TCP $portList"
-    }
-
-    # Per-agent program rules (needed for loopback on some Windows configs)
-    $exePaths = Get-ChildItem -Path $TesterPath -Filter "metatester64.exe" -Recurse -ErrorAction SilentlyContinue
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("advfirewall firewall delete rule name=`"MT5 Tester Agents in`"")
+    $lines.Add("advfirewall firewall delete rule name=`"MT5 Tester Agents out`"")
     foreach ($exe in $exePaths) {
-        $label = "MT5 Agent — $($exe.Directory.Name)"
-        Remove-NetFirewallRule -DisplayName $label -ErrorAction SilentlyContinue
-        New-NetFirewallRule `
-            -DisplayName $label `
-            -Direction Inbound `
-            -Action Allow `
-            -Program $exe.FullName `
-            -Profile Any | Out-Null
+        $lines.Add("advfirewall firewall delete rule name=`"MT5 Agent $($exe.Directory.Name)`"")
     }
-    Write-OK "$($exePaths.Count) per-process inbound rules added"
+    $lines.Add("advfirewall firewall add rule name=`"MT5 Tester Agents in`"  dir=in  action=allow protocol=TCP localport=$portRange profile=any")
+    $lines.Add("advfirewall firewall add rule name=`"MT5 Tester Agents out`" dir=out action=allow protocol=TCP localport=$portRange profile=any")
+    foreach ($exe in $exePaths) {
+        $lines.Add("advfirewall firewall add rule name=`"MT5 Agent $($exe.Directory.Name)`" dir=in action=allow program=`"$($exe.FullName)`" profile=any")
+    }
+
+    $scriptFile = Join-Path $env:TEMP "mt5fw_$(Get-Random).netsh"
+    $lines | Set-Content $scriptFile -Encoding UTF8
+
+    # Capture output — previously swallowed completely
+    $fwOutput = & netsh -f $scriptFile 2>&1
+    Remove-Item $scriptFile -Force -ErrorAction SilentlyContinue
+
+    $fwErrors = $fwOutput | Where-Object { $_ -match "error|failed|invalid" }
+    if ($fwErrors) { Write-WARN "Firewall warnings: $($fwErrors -join '; ')" }
+
+    Write-OK "FW in+out TCP $portRange"
+    Write-OK "$($exePaths.Count) per-process inbound rule(s) added"
 }
 
 function Add-DefenderExclusions {
@@ -436,7 +534,7 @@ function Add-DefenderExclusions {
 
     $mpStatus = Get-MpComputerStatus -ErrorAction SilentlyContinue
     if (-not $mpStatus) {
-        Write-WARN "Defender not active — skipping. Add exclusions manually in your AV."
+        Write-WARN "Defender not active — skipping."
         return
     }
 
@@ -461,22 +559,21 @@ function Add-DefenderExclusions {
 # ─── Summary ──────────────────────────────────────────────────────────────────
 
 function Show-Summary {
-    param([string]$TesterPath, [int[]]$Ports, [string]$Password)
+    param([string]$TesterPath, [int[]]$AllPorts, [int[]]$StartedPorts, [string]$Password)
 
-    $running = (Get-Process -Name "metatester64" -ErrorAction SilentlyContinue).Count
-    $portRange = "$($Ports[0])-$($Ports[-1])"
+    $portRange = if ($AllPorts.Count -gt 0) { "$($AllPorts[0])-$($AllPorts[-1])" } else { "—" }
     $pwdLine = if ($Password) { "set (sync with Terminal options)" } else { "NONE — local use only" }
     $pwdColor = if ($Password) { "White" } else { "DarkYellow" }
 
     Write-Host ""
-    Write-Host "  ┌───────────────────────────────────────────────────────┐" -ForegroundColor Cyan
-    Write-Host "  │                    SETUP COMPLETE                      │" -ForegroundColor Cyan
-    Write-Host "  ├───────────────────────────────────────────────────────┤" -ForegroundColor Cyan
-    Write-Host "  │  Agents created  : $($Ports.Count.ToString().PadRight(34))│" -ForegroundColor White
-    Write-Host "  │  Agents running  : $($running.ToString().PadRight(34))│" -ForegroundColor White
-    Write-Host "  │  Ports assigned  : $($portRange.PadRight(34))│" -ForegroundColor White
-    Write-Host "  │  Agent password  : $($pwdLine.PadRight(34))│" -ForegroundColor $pwdColor
-    Write-Host "  └───────────────────────────────────────────────────────┘" -ForegroundColor Cyan
+    Write-Host "  ┌─────────────────────────────────────────────────────────┐" -ForegroundColor Cyan
+    Write-Host "  │                     SETUP COMPLETE                      │" -ForegroundColor Cyan
+    Write-Host "  ├─────────────────────────────────────────────────────────┤" -ForegroundColor Cyan
+    Write-Host "  │  Agents created  : $($AllPorts.Count.ToString().PadRight(36))│" -ForegroundColor White
+    Write-Host "  │  Agents listening: $($StartedPorts.Count.ToString().PadRight(36))│" -ForegroundColor $(if ($StartedPorts.Count -eq $AllPorts.Count) { "Green" } else { "DarkYellow" })
+    Write-Host "  │  Ports assigned  : $($portRange.PadRight(36))│" -ForegroundColor White
+    Write-Host "  │  Agent password  : $($pwdLine.PadRight(36))│" -ForegroundColor $pwdColor
+    Write-Host "  └─────────────────────────────────────────────────────────┘" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  MT5 Terminal → Tools → Options → Expert Advisors:" -ForegroundColor DarkGray
     Write-Host "    ✦ Allow local agents" -ForegroundColor DarkGray
@@ -494,44 +591,54 @@ function Main {
     Assert-Admin
     Assert-Params
 
-    $maxAgents = [Environment]::ProcessorCount
-    Write-INFO "Logical CPUs: $maxAgents  →  target agent count: $maxAgents"
+    Write-INFO "Logical CPUs: $([Environment]::ProcessorCount)  →  target agent count: $MaxAgents"
 
-    # 1. Download package from GitHub
+    # 1. Download package — do this FIRST so the exe is in hand before any destructive steps
     $pkg = Get-MT5Package -Token $GitHubToken -Owner $GitHubOwner `
         -Repo $GitHubRepo -Tag $GitHubTag -Asset $AssetName
 
     try {
-        # 2. Stop + clean
+        # 2. Stop existing agents and release their ports before port scanning
         Stop-AllAgents
         Remove-AgentFolders -TesterPath $TesterRoot
 
-        # 3. Create — returns exact array of ports that were actually assigned
+        # 3. Create agent folders — all port assignments happen here
         [int[]]$assignedPorts = New-AgentFolders `
             -TesterPath $TesterRoot `
             -SourceExe $pkg.TesterExe `
             -AgentHost $AgentHost `
             -PortStart $PortStart `
-            -Count $maxAgents `
+            -Count $MaxAgents `
             -Password $AgentPassword
 
         if ($assignedPorts.Count -eq 0) {
             throw "No agents were created — check port availability and disk space."
         }
 
-        # 4. Security — receives the real port list, not an assumed sequential range
+        # 4. Security rules use the actual assigned port list
         Add-FirewallRules -TesterPath $TesterRoot -Ports $assignedPorts
-        Add-DefenderExclusions -TesterPath $TesterRoot
+        try { Add-DefenderExclusions -TesterPath $TesterRoot }
+        catch { Write-WARN "Defender exclusions failed: $_" }
 
-        # 5. Launch
+        # 5. Launch agents — returns only ports that actually came up
+        [int[]]$startedPorts = @()
         if (-not $SkipStart) {
-            Start-Agents -TesterPath $TesterRoot -AgentHost $AgentHost -Ports $assignedPorts
+            $startedPorts = Start-Agents `
+                -TesterPath $TesterRoot `
+                -AgentHost $AgentHost `
+                -Ports $assignedPorts `
+                -Password $AgentPassword `
+                -PortCheckTimeout $PortCheckTimeout
         }
         else {
             Write-WARN "-SkipStart set — agents created but not launched."
+            $startedPorts = @()
         }
 
-        Show-Summary -TesterPath $TesterRoot -Ports $assignedPorts -Password $AgentPassword
+        Show-Summary -TesterPath $TesterRoot `
+            -AllPorts $assignedPorts `
+            -StartedPorts $startedPorts `
+            -Password $AgentPassword
     }
     finally {
         if (-not $KeepDownload) {
