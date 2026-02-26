@@ -117,13 +117,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          try {
-            gh release delete latest-build --yes --cleanup-tag 2>$null
-            Write-Host "Deleted previous latest-build"
-          } catch {
-            Write-Host "No previous latest-build to delete"
+          # gh returns non-zero even on partial success (e.g. tag already gone)
+          # try/catch does NOT catch native exe exit codes in PowerShell
+          gh release delete latest-build --yes --cleanup-tag 2>&1 | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Deleted previous latest-build release and tag"
+          } else {
+            Write-Host "No previous latest-build to delete (or tag already cleaned) — continuing"
           }
           Start-Sleep -Seconds 2
+          exit 0
+        # Safety net — even if exit 0 somehow doesn't take effect
+        continue-on-error: true
 
       - name: Create GitHub Release
         id: release
