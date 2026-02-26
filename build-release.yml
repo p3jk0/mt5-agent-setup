@@ -1,0 +1,197 @@
+name: Build & Publish MT5 Tester Package
+
+# Triggers:
+#   - Manual (with optional custom tag)
+#   - Push of a version tag: v1.2.3
+#   - Push of metatester64.exe to dist/ (creates a rolling "latest-build" pre-release)
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.0.0). Leave empty to update 'latest-build'."
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark as pre-release?"
+        type: boolean
+        default: false
+
+  push:
+    tags:
+      - "v*.*.*"
+    paths:
+      - "dist/metatester64.exe"
+
+permissions:
+  contents: write   # needed to create releases and upload assets
+
+jobs:
+  build:
+    name: Package & Release
+    runs-on: windows-latest
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for tag-based versioning
+
+      # ── Validate binary ─────────────────────────────────────────────────────
+      - name: Validate metatester64.exe
+        shell: pwsh
+        run: |
+          $exe = "dist\metatester64.exe"
+
+          if (-not (Test-Path $exe)) {
+            Write-Error "dist\metatester64.exe not found. Commit the binary to the dist\ folder first."
+            exit 1
+          }
+
+          $info    = Get-Item $exe
+          $version = (Get-Command $exe -ErrorAction SilentlyContinue).Version
+          $hash    = (Get-FileHash $exe -Algorithm SHA256).Hash
+
+          Write-Host "✔ File     : $($info.FullName)"
+          Write-Host "✔ Size     : $([Math]::Round($info.Length/1KB, 1)) KB"
+          Write-Host "✔ SHA-256  : $hash"
+          if ($version) { Write-Host "✔ Version  : $version" }
+
+          # Save hash for later steps
+          "$hash" | Set-Content "dist\metatester64.sha256"
+
+      # ── Determine release tag ────────────────────────────────────────────────
+      - name: Resolve release tag
+        id: tag
+        shell: pwsh
+        run: |
+          # Priority: workflow_dispatch input → git push tag → rolling pre-release
+          $inputTag = "${{ github.event.inputs.tag }}"
+          $refTag   = ""
+          if ("${{ github.ref }}" -match "^refs/tags/(.+)$") { $refTag = $Matches[1] }
+
+          $tag = if     ($inputTag) { $inputTag }
+                 elseif ($refTag)   { $refTag }
+                 else               { "latest-build" }
+
+          $prerelease = if ($tag -eq "latest-build") { "true" }
+                        elseif ("${{ github.event.inputs.prerelease }}" -eq "true") { "true" }
+                        else { "false" }
+
+          Write-Host "Resolved tag : $tag"
+          Write-Host "Pre-release  : $prerelease"
+
+          "tag=$tag"             | Out-File $env:GITHUB_OUTPUT -Append
+          "prerelease=$prerelease" | Out-File $env:GITHUB_OUTPUT -Append
+
+      # ── Build ZIP ───────────────────────────────────────────────────────────
+      - name: Create release package
+        shell: pwsh
+        run: |
+          $tag     = "${{ steps.tag.outputs.tag }}"
+          $zipName = "mt5-tester-agent.zip"
+          $tmpDir  = New-Item -ItemType Directory -Path "build_tmp" -Force
+
+          # Include binary + hash + ini template
+          Copy-Item "dist\metatester64.exe"      $tmpDir
+          Copy-Item "dist\metatester64.sha256"   $tmpDir
+
+          # Minimal agent ini template (Setup-MT5Agents.ps1 writes the real one)
+          @"
+          [Common]
+          Login=0
+          Server=
+          [Tester]
+          Agent=127.0.0.1:3000
+          "@ | Set-Content "$tmpDir\metatester64.ini.template"
+
+          # Embed version metadata
+          @"
+          {
+            "version": "$tag",
+            "built_at": "$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ' -AsUTC)",
+            "sha256": "$(Get-Content 'dist\metatester64.sha256')",
+            "commit": "${{ github.sha }}"
+          }
+          "@ | Set-Content "$tmpDir\package.json"
+
+          Compress-Archive -Path "$tmpDir\*" -DestinationPath $zipName -Force
+
+          $size = [Math]::Round((Get-Item $zipName).Length / 1KB, 1)
+          Write-Host "✔ Created $zipName ($size KB)"
+
+          # Expose zip name for upload step
+          "zip_name=$zipName" | Out-File $env:GITHUB_OUTPUT -Append
+        id: build
+
+      # ── Create / update GitHub Release ──────────────────────────────────────
+      - name: Delete existing 'latest-build' release (rolling update)
+        if: steps.tag.outputs.tag == 'latest-build'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Delete old release + tag so we can re-create cleanly
+          try {
+            gh release delete latest-build --yes --cleanup-tag 2>$null
+            Write-Host "Deleted previous latest-build release"
+          } catch {
+            Write-Host "No previous latest-build to delete (first run)"
+          }
+          Start-Sleep -Seconds 2   # small delay to let GitHub settle
+
+      - name: Create GitHub Release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: |
+            ${{ steps.tag.outputs.tag == 'latest-build' &&
+                format('Latest Build ({0})', github.sha) ||
+                format('Release {0}', steps.tag.outputs.tag) }}
+          body: |
+            ## MT5 Tester Agent Package
+
+            | Field    | Value |
+            |----------|-------|
+            | Tag      | `${{ steps.tag.outputs.tag }}` |
+            | Commit   | `${{ github.sha }}` |
+            | Built    | `${{ github.run_id }}` |
+            | SHA-256  | see `metatester64.sha256` in package |
+
+            ### Install
+
+            ```powershell
+            # Set env vars (or pass as parameters)
+            $env:MT5_GITHUB_TOKEN = "ghp_your_token"
+            $env:MT5_GITHUB_OWNER = "${{ github.repository_owner }}"
+
+            # Download and run setup
+            irm https://raw.githubusercontent.com/${{ github.repository }}/main/Setup-MT5Agents.ps1 | iex
+            ```
+
+            > Requires **Administrator** privileges and **PowerShell 7+**
+          prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
+          files: mt5-tester-agent.zip
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Post-build validation ────────────────────────────────────────────────
+      - name: Verify uploaded asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag      = "${{ steps.tag.outputs.tag }}"
+          $repoName = "${{ github.repository }}"
+
+          $release = gh release view $tag --repo $repoName --json assets | ConvertFrom-Json
+          $asset   = $release.assets | Where-Object { $_.name -eq "mt5-tester-agent.zip" }
+
+          if (-not $asset) {
+            Write-Error "Asset not found in release — upload may have failed!"
+            exit 1
+          }
+
+          Write-Host "✔ Asset verified: $($asset.name)  ($([Math]::Round($asset.size/1KB,1)) KB)"
+          Write-Host "✔ Download URL  : $($asset.url)"
