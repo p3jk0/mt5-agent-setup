@@ -105,9 +105,33 @@ jobs:
           )
           Set-Content "$tmpDir\package.json" $pkgLines
 
-          Compress-Archive -Path "$tmpDir\*" -DestinationPath $zipName -Force
+          # Compress-Archive has known binary corruption bugs — use .NET directly
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          if (Test-Path $zipName) { Remove-Item $zipName -Force }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $tmpDir.FullName, $zipName,
+            [System.IO.Compression.CompressionLevel]::Optimal, $false
+          )
           $size = [Math]::Round((Get-Item $zipName).Length/1KB, 1)
           Write-Host "Created $zipName ($size KB)"
+
+          # Verify exe inside zip is intact
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($zipName)
+          try {
+            $entry = $zip.Entries | Where-Object { $_.Name -eq "metatester64.exe" }
+            if (-not $entry) { Write-Error "metatester64.exe missing from zip!"; exit 1 }
+            $stream = $entry.Open()
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $zipHash = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','')
+            $stream.Close()
+            $origHash = Get-Content "dist\metatester64.sha256"
+            if ($zipHash -ne $origHash) {
+              Write-Error "SHA-256 MISMATCH — exe corrupted during zip!`nOriginal: $origHash`nIn zip  : $zipHash"
+              exit 1
+            }
+            Write-Host "Integrity verified: SHA-256 matches inside zip"
+          } finally { $zip.Dispose() }
+
           "zip_name=$zipName" | Out-File $env:GITHUB_OUTPUT -Append
 
       - name: Delete existing latest-build release
