@@ -67,18 +67,26 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$GitHubToken = $env:MT5_GITHUB_TOKEN,
-    [string]$GitHubOwner = $env:MT5_GITHUB_OWNER,
-    [string]$GitHubRepo = ($env:MT5_GITHUB_REPO ?? "mt5-agent-setup"),
-    [string]$GitHubTag = ($env:MT5_GITHUB_TAG ?? "latest"),
+    [string]$GitHubToken = "",
+    [string]$GitHubOwner = "",
+    [string]$GitHubRepo = "",
+    [string]$GitHubTag = "",
     [string]$AssetName = "mt5-tester-agent.zip",
-    [string]$AgentPassword = ($env:MT5_AGENT_PASSWORD ?? ""),
-    [string]$TesterRoot = (Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Tester"),
+    [string]$AgentPassword = "",
+    [string]$TesterRoot = "",
     [int]   $PortStart = 3000,
     [string]$AgentHost = "127.0.0.1",
     [switch]$SkipStart,
     [switch]$KeepDownload
 )
+
+# Resolve env var fallbacks here — ?? is PS7+ only and iex inherits the caller's shell
+if (-not $GitHubToken) { $GitHubToken = $env:MT5_GITHUB_TOKEN }
+if (-not $GitHubOwner) { $GitHubOwner = $env:MT5_GITHUB_OWNER }
+if (-not $GitHubRepo) { $GitHubRepo = if ($env:MT5_GITHUB_REPO) { $env:MT5_GITHUB_REPO }    else { "mt5-agent-setup" } }
+if (-not $GitHubTag) { $GitHubTag = if ($env:MT5_GITHUB_TAG) { $env:MT5_GITHUB_TAG }     else { "latest" } }
+if (-not $AgentPassword) { $AgentPassword = if ($env:MT5_AGENT_PASSWORD) { $env:MT5_AGENT_PASSWORD } else { "" } }
+if (-not $TesterRoot) { $TesterRoot = Join-Path $env:APPDATA "MetaQuotes\Terminal\Common\Tester" }
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
