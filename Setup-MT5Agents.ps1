@@ -73,7 +73,7 @@ param(
     [string]$AgentPassword = "mtmtmt555",
     [string]$TesterRoot = "",
     [int]   $PortStart = 3000,
-    [string]$AgentHost = "127.0.0.1",
+    [string]$AgentHost = "0.0.0.0",
     [int]   $PortCheckTimeout = 5000,
     [switch]$SkipStart,
     [bool]$KeepDownload = $true,
