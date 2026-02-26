@@ -200,25 +200,68 @@ function Get-ReleaseAsset {
 function Invoke-AssetDownload {
     param([string]$Owner, [string]$Repo, [int]$AssetId, [string]$Token, [string]$OutPath, [long]$Size)
 
-    $url = "https://api.github.com/repos/$Owner/$Repo/releases/assets/$AssetId"
-    $headers = @{
-        Authorization          = "Bearer $Token"
-        Accept                 = "application/octet-stream"
-        "X-GitHub-Api-Version" = "2022-11-28"
-    }
+    # GitHub asset API returns 302 → S3/CDN signed URL.
+    # S3 rejects requests that carry an Authorization header alongside its own
+    # signed URL params — so we must NOT follow the redirect with auth attached.
+    # Solution: step 1 = resolve the CDN URL (no redirect follow, auth required),
+    #           step 2 = stream-download from CDN URL (no auth header).
 
+    $apiUrl = "https://api.github.com/repos/$Owner/$Repo/releases/assets/$AssetId"
     $sizeMB = [Math]::Round($Size / 1MB, 1)
-    Write-INFO "Downloading ${sizeMB} MB → $OutPath"
+    Write-INFO "Resolving asset URL..."
 
     Add-Type -AssemblyName System.Net.Http
-    $handler = [System.Net.Http.HttpClientHandler]::new()
-    $handler.AllowAutoRedirect = $true
-    $client = [System.Net.Http.HttpClient]::new($handler)
-    $client.Timeout = [TimeSpan]::FromMinutes(10)
-    foreach ($k in $headers.Keys) { $client.DefaultRequestHeaders.Add($k, $headers[$k]) }
+
+    # ── Step 1: get the redirect Location without following it ────────────────
+    $handler1 = [System.Net.Http.HttpClientHandler]::new()
+    $handler1.AllowAutoRedirect = $false
+    $client1 = [System.Net.Http.HttpClient]::new($handler1)
+    $client1.Timeout = [TimeSpan]::FromSeconds(30)
+    $client1.DefaultRequestHeaders.Add("Authorization", "Bearer $Token")
+    $client1.DefaultRequestHeaders.Add("Accept", "application/octet-stream")
+    $client1.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28")
 
     try {
-        $response = $client.GetAsync($url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $resp1 = $client1.GetAsync($apiUrl).GetAwaiter().GetResult()
+        $cdnUrl = $resp1.Headers.Location?.ToString()
+
+        # Some private repos serve content directly (200) rather than redirecting
+        if (($resp1.StatusCode -eq [System.Net.HttpStatusCode]::OK) -and (-not $cdnUrl)) {
+            Write-INFO "Direct response (no redirect) — downloading with auth"
+            $stream = $resp1.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+            $fileStream = [System.IO.File]::Create($OutPath)
+            try {
+                $buffer = [byte[]]::new(81920)
+                $downloaded = 0L
+                while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $fileStream.Write($buffer, 0, $read)
+                    $downloaded += $read
+                }
+                Write-Host "`r  ·  Download complete: $([Math]::Round($downloaded/1MB,1)) MB    "
+            }
+            finally { $fileStream.Dispose(); $stream.Dispose() }
+            return
+        }
+
+        if (-not $cdnUrl) {
+            throw "Expected 302 redirect from GitHub asset API but got $($resp1.StatusCode). Check token scopes."
+        }
+        Write-INFO "CDN URL resolved ($(([Uri]$cdnUrl).Host))"
+    }
+    finally {
+        $client1.Dispose()
+    }
+
+    # ── Step 2: stream from CDN — no Authorization header ────────────────────
+    Write-INFO "Downloading ${sizeMB} MB → $OutPath"
+
+    $handler2 = [System.Net.Http.HttpClientHandler]::new()
+    $handler2.AllowAutoRedirect = $true
+    $client2 = [System.Net.Http.HttpClient]::new($handler2)
+    $client2.Timeout = [TimeSpan]::FromMinutes(10)
+
+    try {
+        $response = $client2.GetAsync($cdnUrl, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
         $response.EnsureSuccessStatusCode() | Out-Null
 
         $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
@@ -248,7 +291,7 @@ function Invoke-AssetDownload {
         }
     }
     finally {
-        $client.Dispose()
+        $client2.Dispose()
     }
 }
 
