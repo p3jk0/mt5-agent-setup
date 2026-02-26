@@ -77,7 +77,7 @@ param(
     [int]   $PortCheckTimeout = 5000,
     [switch]$SkipStart,
     [bool]$KeepDownload = $true,
-    [bool]$ClearCache = $true
+    [bool]$ClearCache = $false
 )
 
 # Env-var fallbacks
@@ -334,6 +334,14 @@ function Get-MT5Package {
 function Uninstall-AllAgents {
     param([string]$TesterExe)
 
+    $procs = Get-Process -Name "metatester64", "metatester" -ErrorAction SilentlyContinue
+    if ($procs) {
+        foreach ($p in $procs) {
+            try { $p | Stop-Process -Force; Write-OK "Killed orphan PID $($p.Id)" }
+            catch { Write-WARN "Could not kill PID $($p.Id): $_" }
+        }
+    }
+
     Write-Step "Uninstalling existing MetaTester agent services..."
 
     # Discover all MetaTester services via CIM
@@ -386,14 +394,7 @@ function Uninstall-AllAgents {
         }
     }
 
-    # Also kill any orphan processes
-    $procs = Get-Process -Name "metatester64", "metatester" -ErrorAction SilentlyContinue
-    if ($procs) {
-        foreach ($p in $procs) {
-            try { $p | Stop-Process -Force; Write-OK "Killed orphan PID $($p.Id)" }
-            catch { Write-WARN "Could not kill PID $($p.Id): $_" }
-        }
-    }
+
 
     # Brief wait for port release
     Start-Sleep -Seconds 2
@@ -588,7 +589,7 @@ function Show-Summary {
     Write-Host "    ✦ Allow local agents" -ForegroundColor DarkGray
     Write-Host "    ✦ Port range : $portRange" -ForegroundColor DarkGray
     if ($Password) {
-        Write-Host "    ✦ Password   : <as configured>" -ForegroundColor DarkGray
+        Write-Host "    ✦ Password   : $Password" -ForegroundColor DarkGray
     }
     Write-Host ""
 }
@@ -607,13 +608,8 @@ function Main {
         -ClearCache:$ClearCache
 
     try {
-        $procs = Get-Process -Name "metatester64", "metatester" -ErrorAction SilentlyContinue
-        if ($procs) {
-            foreach ($p in $procs) {
-                try { $p | Stop-Process -Force; Write-OK "Killed orphan PID $($p.Id)" }
-                catch { Write-WARN "Could not kill PID $($p.Id): $_" }
-            }
-        }
+
+        Uninstall-AllAgents
 
         # 2. Copy exe to TesterRoot (single location)
         Write-Step "Deploying metatester64.exe → $TesterRoot"
