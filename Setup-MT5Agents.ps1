@@ -73,7 +73,7 @@ param(
     [string]$AgentPassword = "biochemia",
     [string]$TesterRoot = "",
     [int]   $PortStart = 3000,
-    [string]$AgentHost = "0.0.0.0",
+    [string]$AgentHost = "127.0.0.1",
     [int]   $PortCheckTimeout = 5000,
     [switch]$SkipStart,
     [bool]$KeepDownload = $true,

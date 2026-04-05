@@ -29,9 +29,9 @@ mt5-agent-setup/
 
 ```powershell
 $env:MT5_GITHUB_TOKEN = "ghp_your_pat_here"
-$env:MT5_GITHUB_OWNER = "your-org-or-username"
+$env:MT5_GITHUB_OWNER = "p3jk0"
 
-irm https://raw.githubusercontent.com/YOUR_USERNAME/mt5-agent-setup/main/Setup-MT5Agents.ps1 | iex
+irm https://raw.githubusercontent.com/p3jk0/mt5-agent-setup/main/Setup-MT5Agents.ps1 | iex
 ```
 
 ### Option B — clone and run
@@ -66,6 +66,9 @@ cd mt5-agent-setup
 | `-SkipStart`     | `false`                                            | Create but don't launch                             |
 | `-KeepDownload`  | `false`                                            | Keep downloaded zip                                 |
 
+Default password for mt5 agent
+[string]$AgentPassword = "mt5Agent"
+
 ---
 
 ## Publishing a new release
@@ -91,7 +94,7 @@ git push --tags
 
 ### Manual trigger
 
-Go to **Actions → Build & Publish MT5 Tester Package → Run workflow**  
+Go to **Actions → Build & Publish MT5 Tester Package → Run workflow**
 Optionally supply a custom tag and toggle pre-release.
 
 ---
