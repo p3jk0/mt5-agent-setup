@@ -70,7 +70,7 @@ param(
     [string]$GitHubTag = "",
     [string]$AssetName = "mt5-tester-agent.zip",
     [int]   $MaxAgents = [Environment]::ProcessorCount,
-    [string]$AgentPassword = "biochemia",
+    [string]$AgentPassword = "mt5Agent",
     [string]$TesterRoot = "",
     [int]   $PortStart = 3000,
     [string]$AgentHost = "127.0.0.1",
